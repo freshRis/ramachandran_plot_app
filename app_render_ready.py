@@ -199,6 +199,7 @@ def display_page(pathname):
     State('pw-input', 'value')
 )
 def login(n_clicks, user, pw):
+    print(f"Login called with: {user}, {pw}")
     if n_clicks > 0:
         u = User.get_user_by_username(user)
         if u is None:
