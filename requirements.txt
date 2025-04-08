@@ -5,3 +5,4 @@ biopython
 plotly
 psycopg2-binary
 gunicorn
+python-dotenv
