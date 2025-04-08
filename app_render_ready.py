@@ -189,3 +189,203 @@ def display_page(pathname):
             style={"width": "60%", "display": "block", "margin": "auto"}
         )
     ])
+    prevent_initial_call='initial_duplicate'
+# Callback per il login
+@app.callback(
+    [Output('login-output', 'children'),
+    Output('session-store','data')],
+    Input('submit-button', 'n_clicks'),
+    State('username-input', 'value'),
+    State('pw-input', 'value')
+)
+def login(n_clicks, user, pw):
+    if n_clicks > 0:
+        u = User.get_user_by_username(user)
+        if u is None:
+            return 'Username not registered', {'logged_in': False}
+        else:
+            if u.check_password(pw):
+                return dcc.Link("Login successful! Go to plot generator", href="/plot_generator"), {'logged_in': True,'username': u.get_username()}
+
+            return 'Username or password incorrect!', {'logged_in': False}
+    
+    return '', {'logged_in': False} 
+
+#callback per il logout
+@app.callback(
+        Output('url','pathname'),
+        Output('navbar-container','children',allow_duplicate=True),
+        Input('logout-button','n_clicks'),
+        prevent_initial_call='initial_duplicate',
+        allow_duplicate=True
+) 
+def logout(n_clicks):
+    if n_clicks > 0:
+        navbar = dbc.NavbarSimple(
+            brand="Ramachandran plot generator",
+            brand_href="/",
+            color="primary",
+            dark=True,
+            children=[
+                dbc.NavItem(dbc.NavLink("Home", href="/")),
+                dbc.NavItem(dbc.NavLink("Login", href="/login")),
+                dbc.NavItem(dbc.NavLink("Register", href="/register")),
+            ],
+        )
+        return '/', navbar
+    else:
+        navbar=dbc.NavbarSimple(
+            brand="Ramachandran plot generator",
+            brand_href="/",
+            color="primary",
+            dark=True,
+            children=[
+                dbc.NavItem(dbc.NavLink("Home", href="/")),
+                dbc.NavItem(dbc.NavLink("Plot generator", href="/plot_generator")),
+                dbc.NavItem(dbc.NavLink("Profile", href="/profile")),
+            ],
+        )
+        return '/profile', navbar
+
+
+
+# Callback per la registrazione
+@app.callback(
+    Output('register-output', 'children'),
+    Input('register-button', 'n_clicks'),
+    State('new-username', 'value'),
+    State('new-password', 'value')
+)
+def register(n_clicks, new_user, new_pw):
+    if n_clicks > 0:
+        if len(new_pw) < 6 or '$' not in new_pw:
+            return 'Password must be at least 6 characters and contain $!'
+
+        if User.get_user_by_username(new_user) is None:
+            new_user_obj = User(new_user, new_pw)
+            new_user_obj.save_to_db()
+            return dcc.Link("Registration successful! Go to plot generator", href="/plot_generator")
+        
+        return 'Error: Username already taken or invalid input!'
+    
+    return ''
+
+# Callback per il ricreare la password
+@app.callback(
+    Output('restore-output', 'children'),
+    Input('restore-pw-button', 'n_clicks'),
+    State('old-username-input', 'value'),
+    State('new-pw-input', 'value')
+)
+def restore_password(n_clicks, username, new_pw):
+    if n_clicks > 0:
+        user = User.get_user_by_username(username)
+        if user:
+            if len(new_pw) < 6 or '$' not in new_pw:
+                return 'Password must be at least 6 characters and contain $!'
+            
+            hashed_pw = generate_password_hash(new_pw)
+            cur.execute("UPDATE users SET pw = %s WHERE username = %s", (hashed_pw, username))
+            connection.commit()
+            return dcc.Link("New password was set successfully! Go to plot generator", href="/plot_generator")
+
+        return 'Username incorrect!'
+    return ''
+
+
+#permetto di far vedere il profilo aggiornato
+@app.callback(
+    Output('user-info', 'children'),  # Cambia la pagina
+    Input('url', 'pathname'),
+    State('session-store', 'data')
+)
+def update_profile(path,data):
+    if path=='/profile':
+        username = data.get('username')
+        #user = User.get_user_by_username()
+        return f"welcome back {username}!"   
+    return ''
+
+
+
+
+def calculate_phi_psi(structure):
+    """Calcola gli angoli phi e psi per ogni residuo della proteina."""
+    phi_psi_angles = []
+    
+    # Parco attraverso tutte le catene della proteina
+    for model in structure:
+        for chain in model:
+            polypeptides = PDB.PPBuilder().build_peptides(chain)
+            for poly_index, poly in enumerate(polypeptides):
+                # Ottieni la lista degli angoli φ (phi) e ψ (psi)
+                phi_psi_list = poly.get_phi_psi_list()  # Restituisce una lista di tuple (phi, psi)
+                
+                # Aggiungi gli angoli a phi_psi_angles se non sono None
+                for phi_psi in phi_psi_list:
+                    if None not in phi_psi:  # Se entrambi gli angoli non sono None
+                        phi_psi_angles.append(phi_psi)
+    
+    # Converti gli angoli da radianti a gradi
+    phi_psi_angles = np.degrees(phi_psi_angles)
+    
+    return np.array(phi_psi_angles)
+
+def plot_ramachandran(phi_psi_angles):
+    """Genera il Ramachandran plot."""
+    # Angoli φ (phi) e ψ (psi)
+    phi = phi_psi_angles[:, 0]
+    psi = phi_psi_angles[:, 1]
+    
+    plot= go.Figure(
+        data=go.Scatter(x=phi,y=psi,mode='markers')
+    ) 
+    plot.update_layout(
+        xaxis_title="Phi (°)",
+        yaxis_title="Psi (°)",
+        width=600,  # Imposta una larghezza fissa
+        height=600,  # Imposta un'altezza uguale per renderlo quadrato
+        xaxis=dict(scaleanchor="y"),  # Mantiene proporzioni 1:1
+        yaxis=dict(scaleanchor="x")   # Blocca le scale assi per farlo quadrato
+    )
+    return plot
+
+
+
+#callback per la selezione delle unità di misura
+
+@app.callback(
+    Output('plot-output', 'children'),
+    Input("upload-file", "contents"),
+    State("upload-file", "filename")
+)
+def generate_plot(contents, filename):
+    if contents is None:
+        return "Nessun file caricato."
+
+    if not filename.endswith(".pdb"):  # Controlla l'estensione
+        return "Errore: Carica un file con estensione .pdb"
+
+    # Decodifica il file PDB
+    _, content_string = contents.split(",")
+    decoded = base64.b64decode(content_string)
+
+    # **Salva il file con il percorso corretto**
+    file_path = f"uploaded_{filename}"  # Salviamo il file nella cartella corrente
+    with open(file_path, "wb") as f:
+        f.write(decoded)
+
+    # Usa il percorso corretto per il parser
+    parser = PDB.PDBParser(QUIET=True)
+    structure = parser.get_structure("protein", file_path)  # Usa il file salvato
+    
+    # Calcola gli angoli φ e ψ
+    phi_psi_angles = calculate_phi_psi(structure)
+    
+    # Genera il Ramachandran plot
+    return dcc.Graph(figure=plot_ramachandran(phi_psi_angles))
+
+
+
+
+
